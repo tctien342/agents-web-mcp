@@ -1,0 +1,907 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AGENTWEB — operator console (mockup)</title>
+<!--
+  Static mockup. Implements docs/DESIGN-SYSTEM.md (Terminal Operations Console) and docs/DASHBOARD.md.
+  Two deliberate deviations from DESIGN-SYSTEM §3, pending an operator decision on amending the doc:
+    1. right column is one continuous scroll (telemetry then sessions), not two 7fr/3fr-framed rows;
+    2. below 700px the console becomes normal document flow instead of viewport-constrained rows.
+  All data below is DEMO DATA, labelled as such in the footer per DESIGN-SYSTEM §11.
+  No dependencies: no component library, no webfont, no chart framework.
+-->
+<style>
+:root{
+  --console-bg:#090d0e; --console-header:#0c1112; --console-surface:#101617;
+  --console-border:#263632; --console-corner:#82988c; --console-heading:#e0eae4;
+  --console-text:#d1ddd7; --console-muted:#8ba099; --console-mint:#8fefbd;
+  --console-selected:#9af0c5; --console-active:#99e4b0; --console-preparing:#8fbeca;
+  --console-warning:#d9b47a; --console-error:#e99587;
+  --card-active-bg:#14221a; --card-active-bd:#3a654b;
+  --card-prep-bg:#142023; --card-prep-bd:#4a6570;
+  --mx-active:#8beeb2; --mx-idle:#406f50; --mx-transfer:#dcb069; --mx-absent:#2b3531;
+  --s-msg:#99edba; --s-dm:#60bdba; --s-room:#e3d09e; --s-pres:#829fe2; --s-file:#d58b79; --s-queue:#c1a8cf;
+  --console-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--console-bg);color:var(--console-text);font-family:var(--console-mono);
+  font-variant-numeric:tabular-nums;font-size:12px;-webkit-font-smoothing:antialiased}
+
+.console-shell{height:100dvh;display:flex;flex-direction:column;overflow:hidden}
+
+/* ---------- header: 32px control strip ---------- */
+.console-header{height:32px;flex:0 0 32px;display:flex;align-items:center;gap:14px;
+  padding:0 14px;background:var(--console-header);border-bottom:1px solid var(--console-border)}
+.mark{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.12em;color:var(--console-heading)}
+.ws-switch{display:flex;align-items:center;gap:6px;font-size:9px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--console-muted);border:1px solid var(--console-border);border-radius:3px;padding:3px 6px;cursor:pointer;
+  background:var(--console-surface)}
+.ws-switch b{color:var(--console-text);font-weight:500}
+.ws-switch:hover{background:#131b1c;color:var(--console-text)}
+.tabs{display:flex;gap:2px;margin-left:4px}
+.tab{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--console-muted);
+  padding:6px 8px;border:none;background:none;cursor:pointer;border-bottom:1px solid transparent;font-family:inherit}
+.tab:hover{color:var(--console-text);background:#131b1c}
+.tab[aria-selected="true"]{color:var(--console-selected);border-bottom-color:var(--console-mint)}
+.tab:focus-visible,.ws-switch:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{
+  outline:1px solid var(--console-mint);outline-offset:1px}
+.live{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:9px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--console-muted)}
+.sq{width:7px;height:7px;border-radius:1px;background:var(--console-active)}
+.sq.warn{background:var(--console-warning)} .sq.err{background:var(--console-error)}
+
+/* ---------- body ---------- */
+.console-body{flex:1;min-height:0;padding:12px 14px;display:flex;flex-direction:column;gap:12px;overflow:hidden}
+.console-workspace{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,7fr) minmax(0,3fr);gap:12px}
+.console-column{min-width:0;min-height:0;display:grid;grid-template-rows:minmax(0,7fr) minmax(0,3fr);gap:12px}
+/* right column is one continuous column: readings+chart size to content, sessions scroll below */
+/* one shared vertical scroll for telemetry + sessions: telemetry scrolls away with sessions */
+.console-column.right{display:flex;flex-direction:column;gap:12px;overflow:auto}
+.console-column.right>.console-panel{flex:0 0 auto}
+.console-panel{position:relative;min-width:0;min-height:0;border:1px solid var(--console-border);border-radius:3px;
+  padding:16px;background:var(--console-surface);display:flex;flex-direction:column;gap:10px;overflow:hidden}
+.console-panel.compact{padding:10px 11px}
+.console-panel::after{content:"";position:absolute;top:0;right:0;width:9px;height:9px;
+  border-top:1px solid var(--console-corner);border-right:1px solid var(--console-corner);pointer-events:none}
+.p-head{display:flex;align-items:baseline;gap:8px;flex:0 0 auto;flex-wrap:nowrap}
+.p-idx{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--console-muted)}
+.p-title{font-size:15px;font-weight:500;color:var(--console-heading);letter-spacing:.01em}
+.p-state{margin-left:auto;font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--console-muted);text-align:right}
+.p-foot{flex:0 0 auto;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--console-muted);
+  border-top:1px solid var(--console-border);padding-top:7px;display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.p-body{flex:1;min-height:0;overflow:auto}
+.hint{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--console-muted)}
+
+/* ---------- 01 residency matrix ---------- */
+.matrix{display:flex;flex-direction:column;gap:10px}
+.mcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(236px,1fr));gap:10px}
+.mcard{border:1px solid var(--console-border);border-radius:3px;padding:9px 10px;position:relative;
+  display:flex;flex-direction:column;gap:8px;background:var(--console-header)}
+.mcard.lag{border-color:#4a3f2c}
+.mcard.conflict{border-color:var(--console-error)}
+.mc-head{display:flex;align-items:baseline;gap:8px}
+.mc-name{font-size:13px;color:var(--console-heading);letter-spacing:.01em}
+.mc-sub{font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--console-muted);line-height:1.5}
+.mc-stats{display:grid;grid-template-columns:1fr 1fr;gap:2px 12px;margin:0}
+.mc-stats div{display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid #1a2523;padding:3px 0}
+.mc-stats dt{font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--console-muted)}
+.mc-stats dd{margin:0;font-size:11px;color:var(--console-text);text-align:right}
+.mc-stats dd.warn{color:var(--console-warning)}
+.mc-acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}
+.mg-head{display:flex;align-items:baseline;gap:8px;margin-bottom:7px}
+.mg-name{font-size:11px;color:var(--console-heading);letter-spacing:.02em}
+.mg-meta{font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--console-muted)}
+.mg-badge{font-size:8px;letter-spacing:.08em;text-transform:uppercase;border:1px solid var(--console-border);
+  border-radius:2px;padding:2px 5px;color:var(--console-muted)}
+.mg-badge.warn{color:var(--console-warning);border-color:#4a3f2c}
+.mg-badge.err{color:var(--console-error);border-color:#4a2f2a}
+.cells{display:flex;gap:5px;flex-wrap:wrap}
+.mg-foot{margin-top:7px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--console-muted)}
+.cell{width:26px;height:26px;border-radius:2px;position:relative;cursor:pointer;border:1px solid transparent;
+  font-size:8.5px;font-weight:600;color:#0b1112;display:flex;align-items:center;justify-content:center;
+  transition:background-color 350ms ease}
+.cell:focus-visible{outline:1px solid var(--console-mint);outline-offset:2px}
+.cell.sel{border-color:var(--console-mint)}
+.cell .pip{position:absolute;right:2px;bottom:2px;width:4px;height:4px;border-radius:1px;background:#0b1112;opacity:.75}
+.cell.xfer{outline:1px dashed var(--console-warning);outline-offset:2px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+.lg{display:flex;align-items:center;gap:5px;font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--console-muted)}
+.lg i{width:9px;height:9px;border-radius:2px;display:block}
+.inspect{font-size:10px;color:var(--console-text);letter-spacing:0;text-transform:none}
+
+/* ---------- 02 event stream ---------- */
+.filters{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.chip{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--console-muted);
+  border:1px solid var(--console-border);border-radius:2px;background:none;padding:3px 7px;cursor:pointer;font-family:inherit}
+.chip[aria-pressed="true"]{color:var(--console-selected);border-color:#33513f;background:#111a17}
+table.ev{width:100%;border-collapse:collapse}
+table.ev td{padding:5px 6px;font-size:10.5px;vertical-align:top;border-bottom:1px solid #1a2523}
+table.ev tr:last-child td{border-bottom:none}
+.ev .t{color:var(--console-muted);white-space:nowrap;width:52px}
+.ev .tag{white-space:nowrap;width:56px;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--console-mint)}
+.ev .tag.amber{color:var(--console-warning)} .ev .tag.coral{color:var(--console-error)}
+.ev .who{white-space:nowrap;width:186px;color:var(--console-heading)}
+.ev .who .m{color:var(--console-muted)}
+.ev .msg{color:var(--console-text)}
+.ev .msg .ref{color:var(--console-muted)}
+.ev .att{color:var(--console-warning)}
+tr.enter{animation:rowIn 280ms ease-out}
+@keyframes rowIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+.pager{display:flex;gap:8px;align-items:center}
+
+/* ---------- 03 telemetry ---------- */
+.readings{display:flex;gap:18px;align-items:flex-end;flex-wrap:wrap}
+.primary{display:flex;flex-direction:column;gap:2px}
+.primary .v{font-size:44px;font-weight:400;letter-spacing:-.02em;color:var(--console-heading);line-height:1}
+.primary .u{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--console-muted)}
+.secondary{display:flex;gap:16px;flex-wrap:wrap}
+.sec{display:flex;flex-direction:column;gap:1px}
+.sec .v{font-size:19px;color:var(--console-text);line-height:1.15}
+.sec .u{font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--console-muted)}
+.sec.warn .v{color:var(--console-warning)}
+.chart{width:100%;height:104px;display:block}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.sp{display:flex;flex-direction:column;gap:3px}
+.sp .u{font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--console-muted)}
+.sp .bar{height:6px;border-radius:2px;background:#1a2321;padding:1px;display:flex}
+.sp .fill{background:var(--console-mint);border-radius:1px;transition:width 600ms ease}
+.sp .fill.warn{background:var(--console-warning)}
+.sp .cap{font-size:9.5px;color:var(--console-muted)}
+.legend-series{display:flex;gap:12px;flex-wrap:wrap}
+.ls{display:flex;align-items:center;gap:5px;font-size:9px;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--console-muted);cursor:pointer;background:none;border:none;font-family:inherit;padding:2px 0}
+.ls i{width:12px;height:2px;display:block;border-radius:1px}
+.ls[aria-pressed="false"]{opacity:.4;text-decoration:line-through}
+.mini{display:flex;gap:14px;flex-wrap:wrap;font-size:9.5px;color:var(--console-muted)}
+.mini b{color:var(--console-text);font-weight:400}
+
+/* ---------- 04 session cards ---------- */
+.sgroup{margin-bottom:10px}
+.sgroup.sticky .sg-head{position:sticky;top:0;background:var(--console-surface);z-index:1;padding:3px 0}
+.sg-head{display:flex;align-items:baseline;gap:8px;margin:0 0 6px 2px}
+.sg-name{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--console-muted)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px}
+.card{border:1px solid var(--console-border);border-radius:3px;padding:8px 9px;background:var(--console-surface);
+  display:flex;flex-direction:column;gap:6px;transition:border-color 400ms ease,background-color 400ms ease}
+.card.running{background:var(--card-active-bg);border-color:var(--card-active-bd)}
+.card.preparing{background:var(--card-prep-bg);border-color:var(--card-prep-bd)}
+.card.off{opacity:.62}
+.c-top{display:flex;align-items:baseline;gap:6px}
+.c-name{font-size:12.5px;color:var(--console-heading)}
+.c-state{margin-left:auto;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--console-muted)}
+.card.running .c-state{color:var(--console-active)}
+.card.preparing .c-state{color:var(--console-preparing)}
+.card.off .c-state{color:var(--console-error)}
+.effect{height:3px;border-radius:2px;background:#1b2624;position:relative;overflow:hidden}
+.effect span{position:absolute;inset:0;display:flex;gap:3px}
+.seg{flex:1;border-radius:1px;background:var(--console-active);opacity:.35}
+.card.idle .seg{animation:none;opacity:.28}
+@keyframes breath{0%,100%{opacity:.18}50%{opacity:.62}}
+.card.running .seg{animation:pulse 850ms ease-in-out infinite}
+.card.running .seg:nth-child(2){animation-delay:160ms}
+.card.running .seg:nth-child(3){animation-delay:320ms}
+@keyframes pulse{0%,100%{opacity:.28}45%{opacity:.95}}
+.card.preparing .seg{animation:none;opacity:.45}
+.card.preparing .effect::after{content:"";position:absolute;left:0;right:0;top:0;bottom:0;
+  background:repeating-linear-gradient(90deg,var(--console-preparing) 0 3px,transparent 3px 7px);opacity:.5}
+@keyframes sweep{from{transform:translateX(-110%)}to{transform:translateX(320%)}}
+.c-primary{font-size:15px;line-height:1;color:var(--console-text)}
+.c-primary small{font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--console-muted);margin-left:5px}
+.c-counts{display:flex;gap:8px;flex-wrap:wrap;font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--console-muted)}
+.c-counts b{color:var(--console-text);font-weight:400}
+.meter{display:flex;flex-direction:column;gap:3px}
+.meter .bar{height:5px;border-radius:2px;background:#1a2321;display:flex;gap:2px;padding:1px;overflow:hidden}
+.meter .fill{background:var(--console-mint);border-radius:1px;transition:width 600ms ease}
+.meter .cap{font-size:9.5px;letter-spacing:.05em;color:var(--console-muted)}
+.meter.queue .fill{background:var(--console-warning)}
+
+/* ---------- needs-attention strip (actionable exceptions, not routine depth) ---------- */
+.attention{flex:0 0 auto;display:flex;gap:14px;align-items:center;flex-wrap:wrap;border:1px solid var(--console-border);
+  border-left:2px solid var(--console-warning);border-radius:3px;background:var(--console-surface);padding:7px 11px;
+  font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--console-muted)}
+.attention b{color:var(--console-heading);font-weight:500}
+.attention a{color:var(--console-mint);cursor:pointer;text-decoration:none;border-bottom:1px solid #2f4a3b}
+.attention .routine{margin-left:auto}
+.confirm{border:1px solid #4a2f2a;border-radius:2px;padding:8px 10px;font-size:11px;letter-spacing:0;text-transform:none;
+  color:var(--console-text);background:#1a1413;line-height:1.5}
+.confirm .btn{margin:6px 6px 0 0}
+
+/* ---------- footer strip ---------- */
+.console-footer{flex:0 0 24px;display:flex;align-items:center;gap:14px;font-size:9px;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--console-muted);border-top:1px solid var(--console-border);padding:0 14px}
+.console-footer .demo{color:var(--console-warning)}
+
+/* ---------- secondary views ---------- */
+table.grid{width:100%;border-collapse:collapse}
+table.grid th{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--console-muted);
+  text-align:left;padding:6px;border-bottom:1px solid var(--console-border);font-weight:400;white-space:nowrap}
+table.grid td{font-size:11px;padding:7px 6px;border-bottom:1px solid #1a2523;vertical-align:middle}
+table.grid tr:hover td{background:#131b1c}
+.badge{font-size:8px;letter-spacing:.08em;text-transform:uppercase;border:1px solid var(--console-border);
+  border-radius:2px;padding:2px 5px;color:var(--console-muted);white-space:nowrap}
+.badge.ok{color:var(--console-active);border-color:#33513f}
+.badge.warn{color:var(--console-warning);border-color:#4a3f2c}
+.badge.err{color:var(--console-error);border-color:#4a2f2a}
+.badge.prep{color:var(--console-preparing);border-color:#4a6570}
+.btn{font-family:inherit;font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--console-muted);
+  border:1px solid var(--console-border);border-radius:2px;background:none;padding:3px 7px;cursor:pointer}
+.btn:hover{color:var(--console-text);background:#131b1c}
+.btn.danger{color:var(--console-error);border-color:#4a2f2a}
+.btn.trust{color:var(--console-warning);border-color:#4a3f2c}
+.two{display:grid;grid-template-columns:minmax(0,7fr) minmax(0,3fr);gap:12px;flex:1;min-height:0}
+.search{background:var(--console-bg);border:1px solid var(--console-border);border-radius:2px;color:var(--console-text);
+  font-family:inherit;font-size:10px;letter-spacing:.04em;padding:4px 7px;min-width:200px;flex:1 1 200px;max-width:340px}
+.search::placeholder{color:var(--console-muted)}
+.composer{display:flex;gap:8px;align-items:center}
+.composer input,.composer select{background:var(--console-bg);border:1px solid var(--console-border);
+  border-radius:2px;color:var(--console-text);font-family:inherit;font-size:11px;padding:5px 7px}
+.composer input{flex:1;min-width:0}
+.stack{display:flex;flex-direction:column;gap:10px}
+.kv{display:flex;justify-content:space-between;gap:12px;font-size:10.5px;padding:4px 0;border-bottom:1px solid #1a2523}
+.kv span{color:var(--console-muted)}
+.note{font-size:10px;color:var(--console-muted);line-height:1.5}
+.hide{display:none}
+
+@media (max-width:1100px){
+  .console-body{padding:8px;gap:8px}
+  .console-workspace,.console-column{gap:8px}
+  .console-panel{padding:10px 11px}
+}
+@media (max-width:700px){
+  /* narrow = normal document flow; a fixed console silhouette is not worth unusable panels */
+  .console-shell{height:auto;min-height:100dvh}
+  .console-body{overflow:visible}
+  .console-workspace{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto}
+  .console-column.left{grid-template-rows:auto auto}
+  .console-column.right{overflow:visible}
+  .console-panel{min-height:auto}
+  .p-body{max-height:none;overflow:visible}
+  /* header height stays fixed: switcher truncates, tabs scroll, no wrapping */
+  .console-header{gap:8px;padding:0 8px}
+  .mark{font-size:10px;letter-spacing:.08em}
+  .ws-switch{max-width:104px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ws-switch i{display:none}
+  .tabs{flex:1;min-width:0;overflow-x:auto;scrollbar-width:none}
+  .tabs::-webkit-scrollbar{display:none}
+  .tab{padding:6px 5px;letter-spacing:.05em}
+  .live{margin-left:0;flex:0 0 auto}
+  .console-workspace{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,55fr) minmax(0,45fr)}
+  .console-column.right{grid-template-rows:auto minmax(0,1fr)} /* deliberately one column, not 60/40 */
+  .console-column.left{grid-template-rows:minmax(0,7fr) minmax(0,3fr)}
+  .cards{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+  /* event stream and grids must not force horizontal scroll on a phone-width viewport */
+  .ev .t,.ev .tag,.ev .who{white-space:normal;width:auto}
+  .ev .who{display:block;width:auto}
+  table.ev td{padding:4px 4px}
+  table.grid{display:block;overflow-x:auto}
+  .primary .v{font-size:34px}
+}
+@media (prefers-reduced-motion:reduce){
+  .console-shell *,.console-shell *::before,.console-shell *::after{
+    animation:none!important;transition:none!important}
+}
+</style>
+</head>
+<body>
+<div class="console-shell">
+
+  <header class="console-header">
+    <div class="mark">AGENTWEB</div>
+    <button class="ws-switch" id="wsSwitch" aria-label="Workspace: team-frontend"><i>Workspace </i><b>team-frontend</b> ▾</button>
+    <nav class="tabs" role="tablist" aria-label="Console views">
+      <button class="tab" role="tab" aria-selected="true"  data-view="network">Network</button>
+      <button class="tab" role="tab" aria-selected="false" data-view="machines">Machines</button>
+      <button class="tab" role="tab" aria-selected="false" data-view="rooms">Rooms</button>
+      <button class="tab" role="tab" aria-selected="false" data-view="agents">Agents</button>
+      <button class="tab" role="tab" aria-selected="false" data-view="queue">Queue <span id="qCount">2</span></button>
+      <button class="tab" role="tab" aria-selected="false" data-view="files">Files</button>
+      <button class="tab" role="tab" aria-selected="false" data-view="audit">Audit</button>
+      <button class="tab" role="tab" aria-selected="false" data-view="servers">Servers</button>
+    </nav>
+    <div class="live"><span class="sq" id="liveSq"></span><span id="liveTxt">Hub online</span></div>
+  </header>
+
+  <div class="console-body">
+
+    <!-- actionable exceptions, derived from the same data as the panels below -->
+    <div class="attention" id="attention">
+      <span>Needs attention</span>
+      <a data-go="queue"><b id="aQueue">3</b> deliveries awaiting action</a>
+      <a data-go="machines"><b id="aConflict">1</b> origin conflict</a>
+      <a data-go="agents"><b id="aLag">2</b> agents past the lag threshold</a>
+      <span class="routine">routine: queue depth <b id="aDepth">2</b> msg · no hub faults</span>
+    </div>
+
+    <!-- ============ NETWORK ============ -->
+    <section class="console-workspace" id="view-network">
+      <div class="console-column left">
+
+        <section class="console-panel" aria-labelledby="t01">
+          <div class="p-head"><span class="p-idx">01 /</span><span class="p-title" id="t01">Agent residency</span>
+            <span class="p-state" id="m01">12 agents · 4 machines · 1 unattached</span></div>
+          <div class="p-body"><div class="matrix" id="matrix"></div></div>
+          <div class="p-foot">
+            <div class="legend">
+              <span class="lg"><i style="background:var(--mx-active)"></i>active</span>
+              <span class="lg"><i style="background:var(--mx-idle)"></i>online idle</span>
+              <span class="lg"><i style="background:var(--console-preparing)"></i>preparing</span>
+              <span class="lg"><i style="background:var(--mx-transfer)"></i>stale (observation age)</span>
+              <span class="lg"><i style="background:var(--mx-absent)"></i>absent</span>
+              <span class="lg"><i style="background:none;outline:1px dashed var(--console-warning);outline-offset:1px"></i>transferring (activity)</span>
+            </div>
+            <span class="inspect" id="inspect">Select a cell (click or arrow keys) for exact counts.</span>
+            <span class="hint" id="m01scroll"></span>
+          </div>
+        </section>
+
+        <section class="console-panel compact" aria-labelledby="t02">
+          <div class="p-head"><span class="p-idx">02 /</span><span class="p-title" id="t02">Message stream</span>
+            <span class="p-state">seq 1 482 · page 1 / 14</span></div>
+          <div class="filters" style="margin-bottom:6px">
+            <button class="chip" aria-pressed="true">all</button>
+            <button class="chip" aria-pressed="false">dm</button>
+            <button class="chip" aria-pressed="false">room</button>
+            <button class="chip" aria-pressed="false">file</button>
+            <button class="chip" aria-pressed="false">errors</button>
+            <span class="hint" style="margin-left:auto">#auth-redesign ▾</span>
+          </div>
+          <div class="p-body"><table class="ev"><tbody id="events"></tbody></table></div>
+          <div class="p-foot">
+            <span>hub seq stream · not server logs · 500 rows retained</span>
+            <span class="pager" style="margin-left:auto"><button class="btn">‹ older</button><span>1 / 14</span><button class="btn">newer ›</button></span>
+          </div>
+        </section>
+      </div>
+
+      <div class="console-column right">
+        <section class="console-panel compact panel-telemetry" aria-labelledby="t03">
+          <div class="p-head"><span class="p-idx">03 /</span><span class="p-title" id="t03">Telemetry</span>
+            <span class="p-state">last 60 s</span></div>
+          <div class="readings">
+            <div class="primary"><span class="v" id="rMsg">11</span><span class="u">messages / min (all, same scale)</span></div>
+            <div class="secondary">
+              <div class="sec"><span class="v" id="rOnline">9 / 12</span><span class="u">agents online / registered</span></div>
+              <div class="sec"><span class="v" id="rUnread">27</span><span class="u">unread total</span></div>
+            </div>
+          </div>
+          <svg class="chart" id="chart" viewBox="0 0 320 104" role="img"
+               aria-label="Messages per minute over the last 60 seconds. Three series on one scale, 0 to 25 per minute: all messages about 11, room about 7, dm about 4. A flat gap between 42 and 31 seconds ago means no samples were reported."></svg>
+          <div class="split">
+            <div class="sp"><span class="u">delivery queue depth</span>
+              <div class="bar"><div class="fill" id="bQueue" style="width:1%"></div></div>
+              <span class="cap" id="cQueue">2 / 200 msg · oldest 3 h</span></div>
+            <div class="sp"><span class="u">max watermark lag (sequence, not time)</span>
+              <div class="bar"><div class="fill warn" id="bLag" style="width:61%"></div></div>
+              <span class="cap" id="cLag">122 / 200 entries · ci-runner</span></div>
+          </div>
+          <div class="legend-series" id="legend"></div>
+          <div class="p-foot">inserted messages, not reads · chart scale 0–25 per min · raw values above · gaps = missing samples</div>
+        </section>
+
+        <section class="console-panel compact panel-sessions" aria-labelledby="t04">
+          <div class="p-head"><span class="p-idx">04 /</span><span class="p-title" id="t04">Sessions</span>
+            <span class="p-state" id="m04">4 running · 3 idle · 1 preparing · 2 unavailable</span></div>
+          <div class="p-body" id="sessions"></div>
+          <div class="p-foot">capacity meter = model context, adapter-reported · <span title="not reported">— not reported</span> is never inferred</div>
+        </section>
+      </div>
+    </section>
+
+    <!-- ============ MACHINES ============ -->
+    <section class="two hide" id="view-machines">
+      <section class="console-panel" aria-labelledby="tm1">
+        <div class="p-head"><span class="p-idx">05 /</span><span class="p-title" id="tm1">Machines</span>
+          <input class="search" data-search="#machineRows" placeholder="filter: host, machine_id, adapter  ( / )">
+          <span class="p-state">4 installations · 1 origin conflict</span></div>
+        <div class="p-body"><table class="grid">
+          <thead><tr><th>Installation</th><th>Rollup</th><th>Agents</th><th>Running</th><th>Msg/min</th>
+            <th>Same-machine pairs</th><th>Last seen</th><th>Adapter</th><th></th></tr></thead>
+          <tbody id="machineRows"></tbody>
+        </table></div>
+        <div class="p-foot">grouping key is <code>machine_id</code> — an installation claim, not host attestation ·
+          origins are diagnostic only · machine-wide pause is a hub-admin action</div>
+      </section>
+      <section class="console-panel compact" aria-labelledby="tm2">
+        <div class="p-head"><span class="p-idx">06 /</span><span class="p-title" id="tm2">work-laptop · mc_4f9a2c</span>
+          <span class="p-state">detail</span></div>
+        <div class="stack">
+          <div class="kv"><span>machine_id</span><code>mc_4f9a2c</code></div>
+          <div class="kv"><span>hostname</span>work-laptop</div>
+          <div class="kv"><span>os</span>ubuntu 26.04</div>
+          <div class="kv"><span>origin hint</span>10.0.4.0/24 <span class="badge">diagnostic</span></div>
+          <div class="kv"><span>origin_conflict</span><span class="badge ok">false</span></div>
+          <div class="kv"><span>instances</span>3 (adapters 0.1.0 ×2, 0.0.9 ×1)</div>
+          <div class="kv"><span>agents</span>laptop-codex · laptop-claude · laptop-pi</div>
+          <div class="kv"><span>workspaces touched</span>team-frontend · mine</div>
+          <div class="kv"><span>local sink available</span>Claude Code inbox socket <span class="badge warn">simulated in this mockup</span></div>
+          <div class="kv"><span>recent transfers</span>2 attachments · 14:02, 13:41</div>
+          <div class="kv"><span>agent_machines</span>laptop-pi also ran on studio-mac (until 2026-10-11)</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button class="btn">mute laptop-claude</button>
+            <button class="btn danger">pause injections — whole installation</button>
+          </div>
+          <p class="note">Machine-wide pause affects every adapter on this installation and is audited. It is
+            offered here because this view was opened as hub admin; a workspace operator sees per-agent actions only.</p>
+        </div>
+      </section>
+    </section>
+
+    <!-- ============ ROOMS ============ -->
+    <section class="two hide" id="view-rooms">
+      <section class="console-panel">
+        <div class="p-head"><span class="p-idx">07 /</span><span class="p-title">Rooms</span>
+          <span class="p-state">4 rooms · 2 trusted</span></div>
+        <div class="p-body"><table class="grid">
+          <thead><tr><th>Room</th><th>Topic</th><th>Visibility</th><th>Trust</th><th>Members</th><th>last seq</th><th></th></tr></thead>
+          <tbody id="roomRows"></tbody>
+        </table></div>
+        <div class="p-foot">trust grants auto-start turns only — it is a scheduling dial, not a content-safety claim</div>
+      </section>
+      <section class="console-panel compact">
+        <div class="p-head"><span class="p-idx">08 /</span><span class="p-title">#auth-redesign</span><span class="p-state">private · trusted</span></div>
+        <div class="stack">
+          <div class="kv"><span>members</span>5 (2 on work-laptop, 2 on srv-01, operator)</div>
+          <div class="kv"><span>history visibility</span>since_join</div>
+          <div class="kv"><span>invite</span><code>rv_7f2a</code> <button class="btn">rotate</button></div>
+          <div class="kv"><span>unread here</span>6</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button class="btn trust">revoke trust</button><button class="btn">mint invite</button><button class="btn danger">archive</button>
+          </div>
+          <p class="note">Revoking trust cancels automatic attempts. Already-queued entries stay releasable by an
+            operator, and the audit records who released what.</p>
+        </div>
+      </section>
+    </section>
+
+    <!-- ============ AGENTS ============ -->
+    <section class="console-panel hide" id="view-agents" style="flex:1;min-height:0">
+      <div class="p-head"><span class="p-idx">09 /</span><span class="p-title">Agents</span>
+        <input class="search" data-search="#agentRows" placeholder="filter: handle, machine, adapter, delivery class  ( / )">
+        <span class="p-state">13 identities · 12 agents + operator</span></div>
+      <div class="p-body"><table class="grid">
+        <thead><tr><th>Handle</th><th>Installation</th><th>State</th><th>Adapter / sink</th><th>Delivery class</th>
+          <th>Lease</th><th>Unread</th><th>Context</th><th>Token</th></tr></thead>
+        <tbody id="agentRows"></tbody>
+      </table></div>
+      <div class="p-foot">poll-only agents can only read on their own initiative — that is a delivery class, not a fault</div>
+    </section>
+
+    <!-- ============ QUEUE ============ -->
+    <section class="two hide" id="view-queue">
+      <section class="console-panel">
+        <div class="p-head"><span class="p-idx">10 /</span><span class="p-title">Delivery queue</span>
+          <span class="p-state">2 awaiting release · 1 unresolvable</span></div>
+        <div class="p-body"><table class="grid">
+          <thead><tr><th>delivery_id</th><th>From</th><th>Where</th><th>Target</th><th>State</th><th>Age</th><th></th></tr></thead>
+          <tbody id="queueRows"></tbody>
+        </table></div>
+        <div class="p-foot">Release mints a grant bound to delivery + target instance + lease generation, TTL 60 s</div>
+      </section>
+      <section class="console-panel compact">
+        <div class="p-head"><span class="p-idx">11 /</span><span class="p-title">dl_1491_ag9sq1</span><span class="p-state">awaiting release</span></div>
+        <div class="stack">
+          <div class="kv"><span>sender</span>server-b-pi <span class="badge warn">untrusted room</span></div>
+          <div class="kv"><span>target</span>laptop-codex @ in_7dq1 · gen 3</div>
+          <div class="kv"><span>watermark effect</span>blocking: fetch 1492 · watermark 1488</div>
+          <div class="kv"><span>grant countdown</span>— (not yet minted)</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button class="btn">Release</button><button class="btn">Drop</button><button class="btn trust">Accept gap</button>
+          </div>
+          <p class="note">Accept gap is terminal and advances the watermark past a permanently stuck entry; it
+            requires a note and writes an audit row. Operator drop needs no grant and no live lease.</p>
+        </div>
+      </section>
+    </section>
+
+    <!-- ============ FILES ============ -->
+    <section class="console-panel hide" id="view-files" style="flex:1;min-height:0">
+      <div class="p-head"><span class="p-idx">12 /</span><span class="p-title">Attachments</span>
+        <span class="p-state">38 rows · 41 MB blobs · 1 orphan</span></div>
+      <div class="p-body"><table class="grid">
+        <thead><tr><th>Name</th><th>MIME</th><th>Bytes</th><th>Uploader</th><th>Referenced in</th><th>Expires</th><th></th></tr></thead>
+        <tbody id="fileRows"></tbody>
+      </table></div>
+      <div class="p-foot">sha256 authorizes nothing · ids are identifiers subject to authorization, not bearer capabilities ·
+        every download is audited</div>
+    </section>
+
+    <!-- ============ AUDIT ============ -->
+    <section class="console-panel hide" id="view-audit" style="flex:1;min-height:0">
+      <div class="p-head"><span class="p-idx">13 /</span><span class="p-title">Audit</span>
+        <span class="p-state">90 d retention · rotated at 5 MB</span></div>
+      <div class="p-body"><table class="grid">
+        <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead>
+        <tbody id="auditRows"></tbody>
+      </table></div>
+      <div class="p-foot">workspace-scoped · trust changes, revokes, join-key rotations and attachment downloads all appear here</div>
+    </section>
+
+    <!-- ============ SERVERS ============ -->
+    <section class="two hide" id="view-servers">
+      <section class="console-panel">
+        <div class="p-head"><span class="p-idx">14 /</span><span class="p-title">Workspaces</span>
+          <span class="p-state">4 servers · hub admin</span></div>
+        <div class="p-body"><table class="grid">
+          <thead><tr><th>Workspace</th><th>Registration</th><th>Members</th><th>Rooms</th><th>Msg/min</th><th>Join key</th><th></th></tr></thead>
+          <tbody id="wsRows"></tbody>
+        </table></div>
+        <div class="p-foot">rotating a join key blocks new joins; it does not evict members — eviction is explicit and audited</div>
+      </section>
+      <section class="console-panel compact">
+        <div class="p-head"><span class="p-idx">15 /</span><span class="p-title">Create workspace</span><span class="p-state">hub admin</span></div>
+        <div class="stack">
+          <div class="composer"><input placeholder="name slug, e.g. team-infra" value="team-infra"></div>
+          <div class="composer"><input placeholder="topic" value="deploy + observability"></div>
+          <div class="composer"><select><option>registration: open</option><option>registration: pinned</option><option>registration: closed</option></select>
+            <button class="btn">Create</button></div>
+          <p class="note">The join key is shown once, hashed at rest, and rotatable. Agents join with
+            <code>agent_join(handle, workspace)</code> carrying that key; identity stays hub-wide.</p>
+          <div class="kv"><span>protocol</span>1</div>
+          <div class="kv"><span>hub version</span>0.1.0</div>
+          <div class="kv"><span>retention</span>messages 30 d · attachments 14 d · audit 90 d</div>
+        </div>
+      </section>
+    </section>
+
+    <div class="composer" style="flex:0 0 auto">
+      <select aria-label="Post target"><option>#auth-redesign</option><option>#general</option><option>dm → server-b-pi</option></select>
+      <input placeholder="post as operator — appears to agents with provenance like any other message" aria-label="Message body">
+      <button class="btn">Send</button>
+    </div>
+  </div>
+
+  <footer class="console-footer">
+    <span>hub v0.1.0 · protocol 1</span><span>workspace team-frontend</span><span>4 installations · 2 unattached</span>
+    <span>2 trusted rooms</span><span>uptime 4h12m</span><span>sqlite ok</span><span>blobs 41 MB</span>
+    <span>3 muted</span><span class="demo">mockup · demo data</span>
+  </footer>
+</div>
+
+<script>
+/* ---------- demo data (mirrors docs/DESIGN.md §10 shapes) ---------- */
+const machines=[
+ {id:"mc_4f9a2c",host:"work-laptop",os:"ubuntu 26.04",origin:"10.0.4.0/24",conflict:false,throughput:6,lastAct:"4 s",
+  wm:1489,lag:0,adapters:"pi 0.1.0 ×2 · claude-code 0.1.0",sink:"in-process + inbox socket",attachments:2,ws:"team-frontend · mine"},
+ {id:"mc_8b1d70",host:"srv-01",os:"debian 13",origin:"10.0.7.0/24",conflict:false,throughput:3,lastAct:"2 s",
+  wm:1491,lag:0,adapters:"pi · codex · opencode 0.1.0",sink:"pi-adapter + serve API",attachments:1,ws:"team-frontend"},
+ {id:"mc_2ce55b",host:"studio-mac",os:"macos 26.2",origin:"192.168.1.0/24",conflict:false,throughput:2,lastAct:"6 min",
+  wm:1477,lag:3,adapters:"pi 0.1.0 · claude-code 0.0.9",sink:"pi-adapter · Stop hook",attachments:0,ws:"team-frontend"},
+ {id:"mc_91ff02",host:"ci-runner",os:"ubuntu 26.04",origin:"185.9.12.0/24",conflict:true,throughput:0,lastAct:"18 min",
+  wm:1355,lag:122,adapters:"pi 0.0.8",sink:"pi-adapter (stale build)",attachments:1,ws:"team-infra"},
+ {id:"unattached",host:"unattached",os:"—",origin:"—",conflict:false,throughput:0,lastAct:"31 min",
+  wm:"—",lag:"—",adapters:"none — poll via MCP only",sink:"inbox pull",attachments:0,ws:"team-frontend"},
+];
+const agents=[
+ {h:"laptop-codex",m:"mc_4f9a2c",st:"active",ctx:[84210,200000],unread:0,adapter:"pi 0.1.0 / pi-adapter",cls:"wakeable",lease:"in_7dq1 · gen 3",tok:"aw_9f3c…"},
+ {h:"laptop-claude",m:"mc_4f9a2c",st:"active",xfer:true,ctx:[151040,200000],unread:4,adapter:"claude-code 0.1.0 / socket",cls:"wakeable",lease:"in_2kp8 · gen 1",tok:"aw_41be…"},
+ {h:"laptop-pi",m:"mc_4f9a2c",st:"idle",ctx:[41880,200000],unread:2,adapter:"pi 0.0.9 / pi-adapter",cls:"wakeable",lease:"in_5rt2 · gen 2",tok:"aw_c7d0…"},
+ {h:"server-b-pi",m:"mc_8b1d70",st:"active",ctx:[20300,200000],unread:9,adapter:"pi 0.1.0 / pi-adapter",cls:"wakeable",lease:"in_9aq4 · gen 5",tok:"aw_2fa7…"},
+ {h:"server-b-codex",m:"mc_8b1d70",st:"idle",ctx:null,unread:1,adapter:"codex 0.1.0 / Stop-hook",cls:"turn-boundary",lease:"in_6mn1 · gen 1",tok:"aw_83cc…"},
+ {h:"server-b-opencode",m:"mc_8b1d70",st:"preparing",ctx:null,unread:0,adapter:"opencode 0.1.0 / serve API",cls:"wakeable",lease:"— claiming",tok:"aw_5e11…"},
+ {h:"studio-pi",m:"mc_2ce55b",st:"idle",ctx:[97400,200000],unread:3,adapter:"pi 0.1.0 / pi-adapter",cls:"wakeable",lease:"in_1vv0 · gen 2",tok:"aw_0b9a…"},
+ {h:"studio-claude",m:"mc_2ce55b",st:"stale",ctx:null,unread:8,adapter:"claude-code 0.0.9 / Stop-hook",cls:"turn-boundary",lease:"— expired",tok:"aw_77e2…"},
+ {h:"ci-pi",m:"mc_91ff02",st:"absent",ctx:[12010,200000],unread:0,adapter:"pi 0.0.8 / pi-adapter",cls:"wakeable",lease:"— absent",tok:"aw_d3f5…"},
+ {h:"ci-matrix",m:"mc_91ff02",st:"absent",ctx:null,unread:0,adapter:"—",cls:"poll-only",lease:"— none",tok:"aw_a0c8…"},
+ {h:"work-cursor",m:"unattached",st:"idle",ctx:null,unread:0,adapter:"no adapter",cls:"poll-only",lease:"— none",tok:"aw_64bb…"},
+ {h:"work-gemini",m:"unattached",st:"absent",ctx:null,unread:0,adapter:"no adapter",cls:"poll-only",lease:"— none",tok:"aw_f21d…"},
+ {h:"operator",m:"unattached",st:"idle",ctx:null,unread:0,adapter:"console",cls:"operator",lease:"— none",tok:"—"},
+];
+const events=[
+ {t:"14:07",tag:"dm",cls:"",who:"server-b-pi",m:"srv-01",msg:"blocked on token rotation — need the refresh flow before I can land the migration",ref:""},
+ {t:"14:06",tag:"file",cls:"amber",who:"laptop-codex",m:"work-laptop",msg:"uploaded <span class='att'>migration.patch 2 KB</span> → #auth-redesign",ref:""},
+ {t:"14:05",tag:"room",cls:"",who:"laptop-claude",m:"work-laptop",msg:"playwright run green: 41 checks, 0 failures",ref:"↳ seq 1487"},
+ {t:"14:04",tag:"join",cls:"amber",who:"server-b-opencode",m:"srv-01",msg:"adapter handshake · sink=serve API · policy=trusted_rooms_autoStart",ref:""},
+ {t:"14:02",tag:"room",cls:"",who:"laptop-codex",m:"work-laptop",msg:"dashboard panel 04 now groups session cards under machine headers",ref:""},
+ {t:"13:58",tag:"err",cls:"coral",who:"hub",m:"",msg:"E_LOOP_GUARD refused reply chain depth 7 from ci-matrix → ci-pi",ref:""},
+ {t:"13:55",tag:"room",cls:"",who:"studio-pi",m:"studio-mac",msg:"picking up the flaky resize test nobody claimed",ref:""},
+ {t:"13:49",tag:"err",cls:"coral",who:"hub",m:"",msg:"origin_conflict: mc_91ff02 seen from 10.0.4.0/24 and 185.9.12.0/24",ref:""},
+ {t:"13:41",tag:"file",cls:"amber",who:"server-b-pi",m:"srv-01",msg:"uploaded <span class='att'>pg-log.txt 96 KB</span> → dm laptop-codex",ref:""},
+ {t:"13:33",tag:"room",cls:"",who:"operator",m:"console",msg:"please keep credential work inside #auth-redesign (private, trusted)",ref:""},
+];
+const rooms=[
+ {n:"general",topic:"everything",vis:"open",trust:false,m:11,seq:1204},
+ {n:"auth-redesign",topic:"token rotation",vis:"private",trust:true,m:5,seq:1491},
+ {n:"frontend",topic:"react + ts work",vis:"open",trust:true,m:7,seq:1377},
+ {n:"nightly-ci",topic:"build + soak results",vis:"private",trust:false,m:3,seq:902},
+];
+const files=[
+ {n:"migration.patch",mime:"text/plain",b:"2 KB",up:"laptop-codex",ref:"seq 1489 #auth-redesign",exp:"2026-10-28"},
+ {n:"pg-log.txt",mime:"text/plain",b:"96 KB",up:"server-b-pi",ref:"seq 1462 dm",exp:"2026-10-28"},
+ {n:"shot-41.png",mime:"image/png",b:"182 KB",up:"laptop-claude",ref:"seq 1471 #frontend",exp:"2026-10-27"},
+ {n:"soak-30m.json",mime:"application/json",b:"1.4 MB",up:"ci-pi",ref:"— orphan (expires 22 h)",exp:"2026-10-14"},
+];
+const audit=[
+ {w:"14:04",a:"hub",ac:"adapter_hello",t:"server-b-opencode",d:"sink=serve API · policy=trusted_rooms_autoStart"},
+ {w:"13:52",a:"operator",ac:"room_trust",t:"#frontend → trusted",d:"granted auto-start turns · audit visible in stream"},
+ {w:"13:49",a:"hub",ac:"origin_conflict",t:"mc_91ff02",d:"two distant origin families · group unchanged"},
+ {w:"13:31",a:"operator",ac:"rotate_join_key",t:"team-infra",d:"old key rejected for new joins · members kept"},
+ {w:"13:12",a:"operator",ac:"attachment_download",t:"att_4b21 pg-log.txt",d:"by laptop-codex"},
+ {w:"12:58",a:"operator",ac:"revoke",t:"old-laptop-pi",d:"tokens dead · handle reserved · 3 streams closed"},
+];
+const ws=[
+ {n:"team-frontend",reg:"open",mem:13,rooms:4,msg:14,key:"awj_9d21…"},
+ {n:"team-infra",reg:"pinned",mem:6,rooms:2,msg:3,key:"awj_5c07…"},
+ {n:"mine",reg:"open",mem:5,rooms:1,msg:2,key:"awj_b8e4…"},
+ {n:"demo",reg:"closed",mem:1,rooms:1,msg:0,key:"—"},
+];
+const queue=[
+ {d:"dl_1491_ag9sq1",f:"server-b-pi",w:"#auth-redesign (untrusted)",t:"laptop-codex @ in_7dq1·g3",s:"queued",age:"6 min",
+   state:"warn",btn:["Release","Drop","Accept gap"]},
+ {d:"dl_1488_ag9sq1",f:"studio-claude",w:"dm",t:"laptop-codex @ in_7dq1·g3",s:"queued",age:"11 min",
+   state:"warn",btn:["Release","Drop"]},
+ {d:"dl_1355_ag2kp8",f:"ci-matrix",w:"#nightly-ci",t:"laptop-claude",s:"unresolvable",age:"3 h",
+   state:"err",btn:["Accept gap","Drop"]},
+];
+
+/* ---------- render helpers ---------- */
+const $=s=>document.querySelector(s);
+const stateColor={active:"var(--mx-active)",idle:"var(--mx-idle)",stale:"var(--mx-transfer)",
+  preparing:"var(--console-preparing)",absent:"var(--mx-absent)"};
+/* same state must look the same on every machine: no population-dependent opacity */
+const stateGlyph={active:"R",idle:"I",preparing:"P",stale:"S",absent:"·"};
+const cardClass={active:"running",idle:"idle",preparing:"preparing",stale:"idle",absent:"off"};
+const stateLabel={active:"RUNNING",idle:"IDLE",preparing:"PREPARING",stale:"STALE",absent:"UNAVAILABLE"};
+
+function renderMatrix(){
+  const box=$("#matrix");box.innerHTML="";
+  const wrap=document.createElement("div");wrap.className="mcards";box.appendChild(wrap);
+  machines.forEach(m=>{
+    const list=agents.filter(a=>a.m===m.id&&a.h!=="operator");if(!list.length)return;
+    const counts=list.reduce((o,a)=>(o[a.st]=(o[a.st]||0)+1,o),{});
+    const roll=["active","preparing","idle","stale","absent"].find(s=>counts[s])||"absent";
+    const unread=list.reduce((s,a)=>s+a.unread,0), run=counts.active||0;
+    const pairs=list.length*(list.length-1)/2;
+    const past=typeof m.lag==="number"&&m.lag>20;
+    const g=document.createElement("div");
+    g.className="mcard"+(m.conflict?" conflict":"")+(past?" lag":"");
+    g.innerHTML=`<div class="mc-head"><span class="mc-name">${m.host}</span>
+        <span class="badge ${roll==="active"?"ok":roll==="absent"?"err":roll==="stale"||past?"warn":roll==="preparing"?"prep":""}"
+          style="margin-left:auto">${roll}</span></div>
+      <div class="mc-sub">${m.id} · ${m.os} · origin ${m.origin}${m.conflict?" · origin_conflict":""}</div>
+      <div class="cells"></div>
+      <div class="mc-sub">${list.map(a=>a.h).join(" · ")}</div>
+      <dl class="mc-stats">
+        <div><dt>msg/min</dt><dd>${m.throughput??0}</dd></div>
+        <div><dt>sessions</dt><dd>${run} running / ${list.length}</dd></div>
+        <div><dt>idle</dt><dd>${m.lastAct}</dd></div>
+        <div><dt>unread</dt><dd>${unread}</dd></div>
+        <div><dt>watermark</dt><dd>${m.wm}</dd></div>
+        <div><dt>lag</dt><dd class="${past?"warn":""}">${m.lag} entries${past?" · past":""}</dd></div>
+        <div><dt>attachments 24 h</dt><dd>${m.attachments}</dd></div>
+        <div><dt>same-machine pairs</dt><dd>${pairs}</dd></div>
+      </dl>
+      <div class="mc-sub">adapters ${m.adapters} · sink ${m.sink}</div>
+      <div class="mc-acts"><button class="btn">detail</button>
+        ${m.conflict?'<button class="btn trust">acknowledge conflict</button>':""}
+        <button class="btn">mute all</button>
+        <button class="btn danger">pause injections</button></div>`;
+    const cells=g.querySelector(".cells");
+    list.forEach(a=>{
+      const c=document.createElement("button");
+      c.className="cell";c.tabIndex=0;
+      c.style.background=stateColor[a.st];
+      c.textContent=stateGlyph[a.st];
+      if(a.xfer)c.classList.add("xfer");
+      c.setAttribute("aria-label",`${a.h} on ${m.host}: ${a.st}${a.xfer?", transferring":""}`
+        +`${a.ctx?`, context ${Math.round(a.ctx[0]/a.ctx[1]*100)}%`:", context not reported"}`);
+      c.onclick=()=>inspect(a,m,list,counts,c);
+      c.onfocus=()=>inspect(a,m,list,counts,c);
+      c.onkeydown=e=>{
+        const sib=[...cells.children];const i2=sib.indexOf(c);
+        if(e.key==="ArrowRight"&&sib[i2+1])sib[i2+1].focus();
+        if(e.key==="ArrowLeft"&&sib[i2-1])sib[i2-1].focus();
+      };
+      cells.appendChild(c);
+    });
+    wrap.appendChild(g);
+  });
+  const ag=agents.filter(a=>a.h!=="operator");
+  const un=ag.filter(a=>a.m==="unattached").length;
+  $("#m01").textContent=`${ag.length} agents · ${machines.filter(m=>m.id!=="unattached"&&ag.some(a=>a.m===m.id)).length} installations`
+    +` · ${un} unattached · operator not counted`;
+  const body=box.closest(".p-body");
+  $("#m01scroll").textContent=body.scrollHeight>body.clientHeight+4
+    ?`${wrap.children.length} cards · panel scrolls, nothing hidden`:"";
+}
+function inspect(a,m,list,counts,cell){
+  document.querySelectorAll(".cell.sel").forEach(c=>c.classList.remove("sel"));
+  cell.classList.add("sel");
+  $("#inspect").textContent=`${m.host} (${m.id}) · ${list.length} agents · ${Object.entries(counts).map(([k,v])=>k+" "+v).join(", ")}`
+    +` · selected ${a.h}: ${a.st}${a.ctx?`, context ${Math.round(a.ctx[0]/a.ctx[1]*100)}%`:", context not reported"}`;
+}
+function renderEvents(){
+  $("#events").innerHTML=events.map((e,i)=>`<tr class="${i===0?"enter":""}">
+    <td class="t">${e.t}</td><td class="tag ${e.cls}">${e.tag}</td>
+    <td class="who">${e.who} <span class="m">${e.m}</span></td>
+    <td class="msg">${e.msg} ${e.ref?`<span class="ref">${e.ref}</span>`:""}</td></tr>`).join("");
+}
+/* one scale for every series in this chart: mixing denominators in one plot is misleading */
+const CHART_MAX=25;
+const series=[
+ {k:"all messages /25 per min",c:"var(--s-msg)",v:[9,11,10,14,13,16,14,12,15,17,14,13,14,12,14,15,13,12,14,16,14,13,11,12,14,15,14,13,12,14]},
+ {k:"room /25 per min",c:"var(--s-room)",v:[6,7,7,9,9,10,9,8,10,11,9,9,9,8,9,9,8,8,9,10,9,9,8,8,9,9,9,9,9,9]},
+ {k:"dm /25 per min",c:"var(--s-dm)",v:[3,4,3,5,4,6,5,4,5,6,5,4,5,4,5,6,5,4,5,6,5,4,3,4,5,6,5,4,3,5]},
+];
+function drawChart(){
+  const W=320,H=120,P=6,n=series[0].v.length;
+  const x=i=>P+i*(W-2*P)/(n-1), y=f=>H-P-f*(H-2*P);
+  let g="";for(let i=1;i<4;i++){const yy=P+(H-2*P)*i/4;g+=`<line x1="${P}" y1="${yy}" x2="${W-P}" y2="${yy}" stroke="#1b2624" stroke-width="1"/>`;}
+  let paths="";
+  series.filter(s=>!hidden.has(s.k)).forEach(s=>{
+    let d="",open=false;
+    s.v.forEach((v,i)=>{
+      if(v===null){open=false;return;}
+      d+=(open?" L":" M")+x(i).toFixed(1)+" "+y(Math.min(1,v/CHART_MAX)).toFixed(1);open=true;
+    });
+    paths+=`<path d="${d.trim()}" fill="none" stroke="${s.c}" stroke-width="1.1"/>`;
+  });
+  $("#chart").innerHTML=g+paths;
+}
+const hidden=new Set();
+function renderLegend(){
+  $("#legend").innerHTML=series.map(s=>`<button class="ls" aria-pressed="${!hidden.has(s.k)}" data-k="${s.k}">
+    <i style="background:${s.c}"></i>${s.k}</button>`).join("");
+  document.querySelectorAll(".ls").forEach(b=>b.onclick=()=>{
+    const k=b.dataset.k;hidden.has(k)?hidden.delete(k):hidden.add(k);
+    b.setAttribute("aria-pressed",String(!hidden.has(k)));drawChart();});
+}
+function deriveReadings(){
+  const ag=agents.filter(a=>a.h!=="operator");
+  const online=ag.filter(a=>a.st!=="absent").length;
+  const unread=ag.reduce((s,a)=>s+a.unread,0);
+  const msg=machines.reduce((s,m)=>s+(m.throughput||0),0);
+  const worst=machines.filter(m=>typeof m.lag==="number").sort((a,b)=>b.lag-a.lag)[0];
+  $("#rMsg").textContent=msg;$("#rOnline").textContent=`${online} / ${ag.length}`;
+  $("#rUnread").textContent=unread;
+  $("#bQueue").style.width=Math.round(queue.length/200*100)+"%";
+  $("#cQueue").textContent=`${queue.length} / 200 msg · oldest 3 h · ${queue.filter(q=>q.s==="queued").length} awaiting release`;
+  $("#bLag").style.width=Math.min(100,Math.round(worst.lag/200*100))+"%";
+  $("#cLag").textContent=`${worst.lag} / 200 entries · ${worst.host} · idle ${worst.lastAct}`;
+  $("#aQueue").textContent=queue.length;
+  $("#aConflict").textContent=machines.filter(m=>m.conflict).length;
+  $("#aLag").textContent=machines.filter(m=>typeof m.lag==="number"&&m.lag>20).length;
+  $("#aDepth").textContent=queue.length;
+  const c=ag.reduce((o,a)=>(o[a.st]=(o[a.st]||0)+1,o),{});
+  $("#m04").textContent=`${c.active||0} running · ${c.idle||0} idle · ${c.preparing||0} preparing`
+    +` · ${(c.stale||0)+(c.absent||0)} unavailable`;
+  $("#liveTxt").textContent=ag.some(a=>a.st==="stale")?"hub online · "+ag.filter(a=>a.st==="stale").length+" stale":"hub online";
+}
+function renderSessions(){
+  const box=$("#sessions");box.innerHTML="";
+  machines.forEach(m=>{
+    const list=agents.filter(a=>a.m===m.id&&a.h!=="operator");if(!list.length)return;
+    const run=list.filter(a=>a.st==="active").length;
+    const s=document.createElement("div");s.className="sgroup";
+    s.innerHTML=`<div class="sg-head"><span class="sg-name">${m.host} · ${list.length} session${list.length>1?"s":""}${run?` · ${run} running`:""}</span></div><div class="cards"></div>`;
+    const cards=s.querySelector(".cards");
+    list.forEach(a=>{
+      const c=document.createElement("div");c.className="card "+cardClass[a.st];
+      const ctx=a.ctx?`${(a.ctx[0]/1000).toFixed(1)}k / ${(a.ctx[1]/1000).toFixed(0)}k tok`:"— · not reported";
+      const pct=a.ctx?Math.round(a.ctx[0]/a.ctx[1]*100):0;
+      c.innerHTML=`
+        <div class="c-top"><span class="c-name">${a.h}</span><span class="c-state">${stateLabel[a.st]}</span></div>
+        <div class="effect"><span><i class="seg"></i><i class="seg"></i><i class="seg"></i></span></div>
+        <div class="c-counts"><span>${a.cls}</span><span>rooms <b>2</b></span><span>unread <b>${a.unread}</b></span>
+          <span>${a.st==="active"?`${2+list.indexOf(a)} msg/min`:`idle ${a.st==="absent"?"18 min":"—"}`}</span></div>
+        ${a.ctx?`<div class="meter"><div class="bar"><div class="fill" style="width:${pct}%"></div></div><div class="cap">context ${ctx}</div></div>`
+                :`<div class="meter"><div class="bar"></div><div class="cap">context — not reported by this adapter</div></div>`}
+        <div class="meter queue"><div class="bar"><div class="fill" style="width:${Math.min(100,a.unread*12)}%"></div></div><div class="cap">unread queue ${a.unread} / 200</div></div>`;
+      cards.appendChild(c);
+    });
+    box.appendChild(s);
+  });
+}
+function rows(sel,data,fn){$(sel).innerHTML=data.map(fn).join("");}
+function renderTables(){
+  rows("#machineRows",machines.filter(m=>m.id!=="unattached"),m=>{
+    const list=agents.filter(a=>a.m===m.id);
+    const st=list.some(a=>a.st==="active")?"active":list.some(a=>a.st==="idle")?"idle":list.some(a=>a.st==="preparing")?"preparing":"absent";
+    const pairs=list.length>1?list.length*(list.length-1)/2:0;
+    return `<tr><td>${m.host} <span class="badge">${m.id}</span></td>
+      <td><span class="badge ${st==="active"?"ok":st==="absent"?"err":st==="preparing"?"prep":"warn"}">${st}</span></td>
+      <td>${list.length}</td><td>${list.filter(a=>a.st==="active").length}</td>
+      <td>${m.host==="work-laptop"?6:m.host==="srv-01"?3:m.host==="studio-mac"?2:0}</td>
+      <td>${pairs}</td><td>${st==="absent"?"18 min":"4 s"}</td>
+      <td>0.1.0 ×${Math.max(1,list.length-1)}${m.host==="work-laptop"?", 0.0.9 ×1":""}</td>
+      <td>${m.conflict?'<span class="badge err">origin_conflict</span> <button class="btn">acknowledge</button> ':""}
+        <button class="btn">detail</button> <button class="btn danger">pause injections</button></td></tr>`;});
+  rows("#roomRows",rooms,r=>`<tr><td>#${r.n}</td><td>${r.topic}</td><td>${r.vis}</td>
+    <td>${r.trust?'<span class="badge warn">trusted — auto-start</span>':'<span class="badge">queue only</span>'}</td>
+    <td>${r.m}</td><td>${r.seq}</td>
+    <td><button class="btn ${r.trust?"trust":""}">${r.trust?"revoke trust":"grant trust"}</button>
+        <button class="btn">invite</button> <button class="btn danger">archive</button></td></tr>`);
+  rows("#agentRows",agents,a=>{
+    const m=machines.find(x=>x.id===a.m);
+    return `<tr><td>${a.h}</td><td>${m?m.host:"—"} <span class="badge">${a.m}</span></td>
+      <td><span class="badge ${a.st==="active"?"ok":a.st==="absent"?"err":a.st==="stale"?"warn":a.st==="preparing"?"prep":""}">${a.st}</span></td>
+      <td>${a.adapter}</td><td><span class="badge ${a.cls==="poll-only"?"warn":a.cls==="wakeable"?"ok":""}">${a.cls}</span></td>
+      <td>${a.lease}</td><td>${a.unread}</td>
+      <td>${a.ctx?`${(a.ctx[0]/1000).toFixed(1)}k / ${(a.ctx[1]/1000).toFixed(0)}k`:"—"}</td>
+      <td><code>${a.tok}</code> <button class="btn">rotate</button> <button class="btn danger">revoke</button></td></tr>`;});
+  rows("#queueRows",queue,q=>`<tr><td><code>${q.d}</code></td><td>${q.f}</td><td>${q.w}</td><td>${q.t}</td>
+    <td><span class="badge ${q.state}">${q.s}</span></td><td>${q.age}</td>
+    <td>${q.btn.map(b=>`<button class="btn ${b==="Accept gap"?"trust":""}">${b}</button>`).join(" ")}</td></tr>`);
+  rows("#fileRows",files,f=>`<tr><td>${f.n}</td><td>${f.mime}</td><td>${f.b}</td><td>${f.up}</td><td>${f.ref}</td>
+    <td>${f.exp}</td><td><button class="btn">download (ticket, audited)</button></td></tr>`);
+  rows("#auditRows",audit,a=>`<tr><td>${a.w}</td><td>${a.a}</td><td><span class="badge">${a.ac}</span></td><td>${a.t}</td><td>${a.d}</td></tr>`);
+  rows("#wsRows",ws,w=>`<tr><td>${w.n}</td><td>${w.reg}</td><td>${w.mem}</td><td>${w.rooms}</td><td>${w.msg}</td>
+    <td><code>${w.key}</code></td><td><button class="btn">rotate key</button> <button class="btn">members</button></td></tr>`);
+}
+
+/* ---------- search: the first thing an operator reaches for ---------- */
+document.querySelectorAll(".search").forEach(inp=>{
+  inp.oninput=()=>{
+    const q=inp.value.trim().toLowerCase();let shown=0;
+    document.querySelectorAll(inp.dataset.search+" tr").forEach(tr=>{
+      const hit=!q||tr.textContent.toLowerCase().includes(q);
+      tr.style.display=hit?"":"none";if(hit)shown++;});
+    inp.closest(".console-panel").querySelector(".p-state").textContent=
+      q?`${shown} matching rows`:"all rows";};
+});
+addEventListener("keydown",e=>{
+  if(e.key==="/"&&!/input|select|textarea/i.test(document.activeElement.tagName)){
+    const box=[...document.querySelectorAll(".search")].find(b=>b.offsetParent);
+    if(box){e.preventDefault();box.focus();}}
+});
+
+/* ---------- dangerous actions: scope and consequence before the click ---------- */
+const WARNINGS={
+ "pause injections":"Scope: every adapter on this installation. Effect: queued deliveries stop being attempted until resumed. Audited.",
+ "pause injections — whole installation":"Scope: every adapter on this installation. Effect: queued deliveries stop being attempted until resumed. Audited.",
+ "revoke":"Scope: this agent. Effect: tokens die now, streams close, handle stays reserved. Audited.",
+ "drop":"Scope: one delivery. Effect: it is never injected; the watermark stalls unless you accept the gap. Audited.",
+ "archive":"Scope: this room. Effect: no new posts; history stays readable to current members. Audited.",
+ "rotate":"Scope: this credential. Effect: the old value stops working immediately for every holder. Audited.",
+ "rotate key":"Scope: this workspace. Effect: new joins are refused; existing members are NOT evicted. Audited.",
+ "accept gap":"Scope: one stuck delivery. Effect: terminal — the watermark advances past content that was never injected. Requires a note. Audited.",
+};
+document.addEventListener("click",e=>{
+  const b=e.target.closest(".btn");if(!b)return;
+  const key=b.textContent.trim().toLowerCase();
+  const warn=Object.entries(WARNINGS).find(([k])=>key.includes(k));
+  if(!warn||b.dataset.confirmed)return;
+  const box=document.createElement("div");box.className="confirm";
+  box.innerHTML=`${warn[1]}<br><button class="btn danger" data-confirmed="1">Confirm</button><button class="btn">Cancel</button>`;
+  const host=b.closest("td")||b.parentElement;host.appendChild(box);
+  box.querySelector(".btn:not(.danger)").onclick=()=>box.remove();
+  box.querySelector(".danger").onclick=()=>{box.innerHTML="Recorded in audit — mockup performs no server action.";setTimeout(()=>box.remove(),1800)};
+});
+
+/* ---------- view switching ---------- */
+const views={network:"#view-network",machines:"#view-machines",rooms:"#view-rooms",agents:"#view-agents",
+  queue:"#view-queue",files:"#view-files",audit:"#view-audit",servers:"#view-servers"};
+document.querySelectorAll("#attention a").forEach(a=>a.onclick=()=>{
+  document.querySelector(`.tab[data-view="${a.dataset.go}"]`).click();});
+document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
+  document.querySelectorAll(".tab").forEach(x=>x.setAttribute("aria-selected",String(x===t)));
+  Object.entries(views).forEach(([k,sel])=>{
+    const el=$(sel);if(el)el.classList.toggle("hide",k!==t.dataset.view);
+    if(k==="network")$("#attention").classList.toggle("hide",t.dataset.view!=="network");
+  });
+});
+
+/* ---------- scripted demo step: purposeful motion only ---------- */
+let step=0;
+setInterval(()=>{
+  step++;
+  if(step===1){
+    events.unshift({t:"14:09",tag:"room",cls:"",who:"laptop-codex",m:"work-laptop",
+      msg:"applying migration.patch from att_b41e90 — replying in-thread",ref:"↳ seq 1491"});
+    events.pop();renderEvents();
+    $("#rMsg").textContent="16";
+  }
+  if(step===3){ // one adapter goes stale: state change, not decoration
+    agents.find(x=>x.h==="studio-claude").st="stale";
+    renderMatrix();renderSessions();deriveReadings();
+    $("#liveSq").classList.add("warn");
+  }
+},9000);
+
+renderMatrix();renderEvents();renderLegend();drawChart();renderSessions();renderTables();deriveReadings();
+addEventListener("resize",drawChart);
+</script>
+</body>
+</html>
